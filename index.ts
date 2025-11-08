@@ -1,4 +1,4 @@
-import { clusterApiUrl, Connection, Keypair, VersionedTransaction, type TokenBalance } from "@solana/web3.js";
+import { clusterApiUrl, Connection, Keypair, PublicKey, VersionedTransaction, type TokenBalance } from "@solana/web3.js";
 import axios from "axios";
 import bs58 from "bs58";
 import { drizzle } from "drizzle-orm/libsql";
@@ -47,14 +47,14 @@ server.post("/sell", async (req, res) => {
 
 		const wallet = Keypair.fromSecretKey(bs58.decode(privateKeyBase58))
 
-		const tx = await doJupSwap({ outputMint: CASHMINT, inputMint: mint, amount }, wallet)
+		const swapInfo = await doJupSwap({ outputMint: CASHMINT, inputMint: mint, amount }, wallet)
 		const inserted = await db.insert(trades).values({
 			amount,
-			price: tx.buyPrice,
+			price: swapInfo.buyPrice,
 			side: "SELL",
 			timestamp: new Date().toString(),
 			token: mint,
-			tx_hash: tx.tx,
+			tx_hash: swapInfo.tx,
 			user_id: wallet.publicKey.toString(),
 		}).returning()
 		res.send(inserted)
@@ -85,10 +85,9 @@ server.get("/pnl/:userId", async (req, res) => {
 		)
 		.groupBy(trades.token)
 		.having(sql`SUM(
-        CASE WHEN ${trades.side} = 'BUY' THEN CAST(${trades.amount} AS REAL)
-             ELSE -CAST(${trades.amount} AS REAL) END
-      ) > 0`)
-		.execute();
+	     CASE WHEN ${trades.side} = 'BUY' THEN CAST(${trades.amount} AS REAL)
+	          ELSE -CAST(${trades.amount} AS REAL) END
+	   ) > 0`)
 
 
 	if (agg.length === 0) {
@@ -123,12 +122,17 @@ server.get("/pnl/:userId", async (req, res) => {
 
 server.listen({ port: 4000 })
 async function doJupSwap({ inputMint, outputMint, amount }: Record<string, string>, wallet: Keypair) {
+	// const tokenDecimals = await getDecimals(inputMint);
+	// const rawTokenAmount = new Decimal(amount).mul(10 ** tokenDecimals); // 50e9
+
+	const tokenDecimals = await getDecimals(inputMint);
+	const rawAmount = new Decimal(amount).mul(10 ** tokenDecimals);
 	const order = await axios.get("https://lite-api.jup.ag/swap/v1/quote", {
 		validateStatus: () => true,
 		params: {
 			inputMint,
 			outputMint,
-			amount,
+			amount: rawAmount.toString(),
 		}
 	})
 
@@ -174,7 +178,7 @@ async function doJupSwap({ inputMint, outputMint, amount }: Record<string, strin
 		if (t.mint === CASHMINT) {
 			preUsdAmt = t
 		}
-		if (t.mint === inputMint || t.mint === outputMint) {
+		if (t.mint === (inputMint === CASHMINT ? outputMint : inputMint)) {
 			preTokenAmt = t
 		}
 	}
@@ -186,7 +190,7 @@ async function doJupSwap({ inputMint, outputMint, amount }: Record<string, strin
 		if (t.mint === CASHMINT) {
 			postUsdAmt = t
 		}
-		if (t.mint === inputMint || t.mint === outputMint) {
+		if (t.mint === (inputMint === CASHMINT ? outputMint : inputMint)) {
 			postTokenAmt = t
 		}
 	}
@@ -205,6 +209,11 @@ async function doJupSwap({ inputMint, outputMint, amount }: Record<string, strin
 	const usdDelta = preUsd.minus(postUsd).abs();
 
 	const buyPrice = usdDelta.dividedBy(tokenDelta).toString()
+
+
+	console.log(tokenDelta.toString())
+	console.log(usdDelta.toString())
+	console.log(buyPrice)
 
 	return {
 		tx: txid,
@@ -225,5 +234,10 @@ async function getJupPrices(tokens: string[]): Promise<Record<string, number>> {
 		out[id] = res.data[id]?.usdPrice ?? 0;
 	}
 	return out;
+}
+
+async function getDecimals(mint: string): Promise<number> {
+	const info = await rpc.getParsedAccountInfo(new PublicKey(mint));
+	return info.value?.data.parsed.info.decimals ?? 9;
 }
 
