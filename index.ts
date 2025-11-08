@@ -50,7 +50,7 @@ server.post("/sell", async (req, res) => {
 		const tx = await doJupSwap({ outputMint: CASHMINT, inputMint: mint, amount }, wallet)
 		const inserted = await db.insert(trades).values({
 			amount,
-			price: tx.sellPrice,
+			price: tx.buyPrice,
 			side: "SELL",
 			timestamp: new Date().toString(),
 			token: mint,
@@ -205,12 +205,10 @@ async function doJupSwap({ inputMint, outputMint, amount }: Record<string, strin
 	const usdDelta = preUsd.minus(postUsd).abs();
 
 	const buyPrice = usdDelta.dividedBy(tokenDelta).toString()
-	const sellPrice = tokenDelta.dividedBy(usdDelta).toString()
 
 	return {
 		tx: txid,
 		buyPrice,
-		sellPrice
 	};
 }
 
