@@ -1,0 +1,24 @@
+{
+  "name": "solanaproj",
+  "module": "index.ts",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "drizzle-kit": "^0.31.6",
+    "nodemon": "^3.1.10",
+    "tsx": "^4.20.6"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.15.15",
+    "@solana/web3.js": "^1.98.4",
+    "axios": "^1.13.2",
+    "bs58": "^6.0.0",
+    "decimal.js": "^10.6.0",
+    "dotenv": "^17.2.3",
+    "drizzle-orm": "^0.44.7",
+    "fastify": "^5.6.1"
+  }
+}
