@@ -68,27 +68,9 @@ server.get("/pnl/:userId", async (req, res) => {
 	// @ts-ignore
 	const userId = req.params.userId
 	const agg = await db
-		.select({
-			token: trades.token,
-			balance: sql<number>`SUM(
-        CASE WHEN ${trades.side} = 'BUY' THEN CAST(${trades.amount} AS REAL)
-             ELSE -CAST(${trades.amount} AS REAL) END
-      )`.as("balance"),
-			costUsd: sql<number>`SUM(
-        CASE WHEN ${trades.side} = 'BUY' THEN -CAST(${trades.amount} AS REAL) * CAST(${trades.price} AS REAL)
-             ELSE  CAST(${trades.amount} AS REAL) * CAST(${trades.price} AS REAL) END
-      )`.as("costUsd"),
-		})
+		.select()
 		.from(trades)
-		.where(
-			eq(trades.user_id, userId)
-		)
-		.groupBy(trades.token)
-		.having(sql`SUM(
-	     CASE WHEN ${trades.side} = 'BUY' THEN CAST(${trades.amount} AS REAL)
-	          ELSE -CAST(${trades.amount} AS REAL) END
-	   ) > 0`)
-
+		.where(eq(trades.user_id, userId))
 
 	if (agg.length === 0) {
 		return res.send({
@@ -98,24 +80,59 @@ server.get("/pnl/:userId", async (req, res) => {
 		});
 	}
 
+	let totalPnL = 0
 	const tokenList = agg.map((r) => r.token) as string[];
 	const prices = await getJupPrices(tokenList);
 
-	let totalPnL = 0;
-	const tokensOut = agg.map((row) => {
-		const curPrice = prices[row.token ?? ""] ?? 0;
-		const currentValue = row.balance * curPrice;
-		const pnl = currentValue - row.costUsd;
-		totalPnL += pnl;
-		return {
-			token: row.token,
-			pnl: Number(pnl.toFixed(6)),
-		};
+
+	const tokenPNLs = new Map<string, any>();
+
+	agg.forEach((trade) => {
+		const token = trade.token;
+		const amount = parseFloat(trade.amount);
+		const price = parseFloat(trade.price);
+		const side = trade.side;
+
+
+		if (!tokenPNLs.has(token)) {
+			tokenPNLs.set(token, {
+				wabp: 0,
+				currentAmount: 0,
+				realizedPNL: 0,
+				unrealizedPNL: 0,
+				totalPNL: 0
+			});
+		}
+
+		const tokenData = tokenPNLs.get(token)!;
+
+		if (side === 'BUY') {
+			tokenData.currentAmount += amount;
+			tokenData.wabp = (tokenData.wabp * (tokenData.currentAmount - amount) + price * amount) / tokenData.currentAmount;
+		} else if (side === 'SELL') {
+			tokenData.currentAmount -= amount;
+			tokenData.realizedPNL += (price - tokenData.wabp) * amount;
+		}
+
+		if (prices[token]) {
+			const priceDiffPercent = ((prices[token] - tokenData.wabp) / tokenData.wabp) * 100;
+			tokenData.unrealizedPNL = (priceDiffPercent / 100) * tokenData.wabp * tokenData.currentAmount;
+			tokenData.totalPNL = tokenData.realizedPNL + tokenData.unrealizedPNL;
+		}
+
+		totalPnL += tokenData.totalPNL;
 	});
 
-	res.send({
+	return res.send({
 		user_id: userId,
-		tokens: tokensOut,
+		tokens: Array.from(tokenPNLs.entries()).map(([token, data]) => ({
+			token,
+			wabp: data.wabp,
+			currentAmount: data.currentAmount,
+			unrealizedPNL: data.unrealizedPNL,
+			realizedPNL: data.realizedPNL,
+			totalPNL: data.totalPNL
+		})),
 		total_pnl: Number(totalPnL.toFixed(6)),
 	});
 })
